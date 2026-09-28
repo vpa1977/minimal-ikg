@@ -214,6 +214,84 @@ java_binary(
 EOF
 }
 
+# ~99% of intellij-community/android/ (the Android Studio plugin sources) is not
+# needed by the platform build: bazel never references it, and the only android
+# maven artifacts ever published are the 7 com.jetbrains.intellij.android:*
+# gradle-dsl / declarative-lang modules. Trim everything except those 9 source
+# dirs (see Trim-Android.md for the full analysis). Idempotent, unconditional.
+trim_android() {
+    local android_dir="$INTELLIJ_DIR/android"
+    [ -d "$android_dir" ] || return 0
+
+    # .git (nested repo metadata) is kept so the trim stays reversible via
+    # `git -C intellij-community/android checkout -- .`
+    local keep=(
+        .git LICENSE.txt README.md
+        gradle-dsl gradle-dsl-flags gradle-dsl-toml gradle-dsl-kotlin
+        gradle-dsl-declarative gradle-dsl-groovy
+        gradle-declarative-lang gradle-declarative-lang-sync gradle-declarative-lang-ide
+    )
+
+    local trimmed=0
+    local entry name k drop
+    while IFS= read -r entry; do
+        name="$(basename "$entry")"
+        drop=1
+        for k in "${keep[@]}"; do
+            if [ "$name" = "$k" ]; then drop=0; break; fi
+        done
+        if [ "$drop" -eq 1 ]; then
+            rm -rf "$entry"
+            trimmed=1
+        fi
+    done < <(find "$android_dir" -mindepth 1 -maxdepth 1)
+
+    if [ "$trimmed" -eq 1 ]; then
+        log "intellij: trimmed android/ (kept: ${keep[*]})"
+        # Stale JPS caches (incrementalCompilation=true) reference deleted modules.
+        rm -rf "$INTELLIJ_DIR/out/idea-ce"
+    fi
+
+    # checkProductLayout validates every productLayout.pluginLayouts entry with
+    # findRequiredModule, so the androidPlugin layout (full of intellij.android.*
+    # modules) must be removed. Idempotent: skip if already removed; fail loudly
+    # if the anchor is not found (mirrors fix_intellij_lib_build_file).
+    local props="$INTELLIJ_DIR/build/src/org/jetbrains/intellij/build/IdeaCommunityProperties.kt"
+    local plugin_line='CommunityRepositoryModules.androidPlugin(allPlatforms = true),'
+    local anchor='CommunityRepositoryModules.groovyPlugin(),'
+    if grep -qF "$plugin_line" "$props"; then
+        grep -qF "$anchor" "$props" || {
+            echo "ERROR: cannot patch $props: anchor '$anchor' not found" >&2
+            exit 1
+        }
+        sed -i "\|CommunityRepositoryModules\.androidPlugin(allPlatforms = true),|d" "$props"
+    fi
+
+    # Cosmetic: JPS would skip the missing .iml files anyway, but filtering the
+    # android entries keeps the build logs clean. Entries for the kept dirs must
+    # stay: their modules are bundled plugins / publish the android artifacts.
+    local modules_xml="$INTELLIJ_DIR/.idea/modules.xml"
+    if grep -qF '$PROJECT_DIR$/android/' "$modules_xml"; then
+        python3 - "$modules_xml" <<'PYEOF'
+import sys
+path = sys.argv[1]
+keep = (
+    "gradle-dsl", "gradle-dsl-flags", "gradle-dsl-toml", "gradle-dsl-kotlin",
+    "gradle-dsl-declarative", "gradle-dsl-groovy",
+    "gradle-declarative-lang", "gradle-declarative-lang-sync",
+    "gradle-declarative-lang-ide",
+)
+prefix = "$PROJECT_DIR$/android/"
+with open(path) as f:
+    lines = f.readlines()
+out = [l for l in lines
+       if prefix not in l or any(prefix + k + "/" in l for k in keep)]
+with open(path, "w") as f:
+    f.writelines(out)
+PYEOF
+    fi
+}
+
 build_intellij() {
     log "intellij: checking out $INTELLIJ_TAG"
     local current
@@ -222,6 +300,7 @@ build_intellij() {
         git -C "$INTELLIJ_DIR" checkout -q "$INTELLIJ_TAG"
     fi
 
+    trim_android
     ensure_intellij_bazel_target
     fix_intellij_lib_build_file
     seed_intellij_m2_deps
@@ -265,6 +344,7 @@ build_intellij() {
         -Djava.awt.headless=true \
         -Dintellij.build.community.home.path="$INTELLIJ_DIR" \
         -Dintellij.build.skip.build.steps="$INTELLIJ_SKIP_STEPS" \
+        -Dbuild.number="$INTELLIJ_VERSION" \
         -jar "$deploy_jar")
 
     log "intellij: copying maven artifacts into $LOCAL_MAVEN_REPO"
