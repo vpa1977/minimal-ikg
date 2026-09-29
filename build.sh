@@ -29,6 +29,7 @@ GRADLE_DIST_DIR="$ROOT/gradle-dist"
 
 INTELLIJ_CACHE="$ROOT/intellij-cache"              # bazel vendor directory (IntelliJ build)
 GRADLE_KOTLIN_HOME="$ROOT/gradle-kotlin"           # GRADLE_USER_HOME (Kotlin + Gradle builds)
+GRADLE_GRADLE_HOME="$ROOT/gradle-gradle"           # GRADLE_USER_HOME (Gradle builds)
 LOCAL_MAVEN_REPO="$ROOT/gradle-kotlin-maven-repo"  # maven repository (Kotlin + Gradle builds)
 INIT_SCRIPTS_DIR="$ROOT/init-scripts"
 TOOLS_DIR="$ROOT/tools"
@@ -124,12 +125,6 @@ install_tools() {
 # ---------------------------------------------------------------------------
 prepare_dirs() {
     mkdir -p "$INTELLIJ_CACHE" "$GRADLE_KOTLIN_HOME" "$LOCAL_MAVEN_REPO"
-
-    # Seed the Kotlin/Gradle user home from the provided cache to allow mostly-offline builds.
-    if [ -d "$ROOT/.gradle/caches" ] && [ ! -d "$GRADLE_KOTLIN_HOME/caches" ]; then
-        log "dirs: seeding gradle-kotlin from provided .gradle cache"
-        rsync -a "$ROOT/.gradle/" "$GRADLE_KOTLIN_HOME/"
-    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -341,6 +336,7 @@ build_intellij() {
 
     log "intellij: running OpenSourceCommunityInstallersBuildTarget (maven artifacts)"
     (cd "$INTELLIJ_DIR" && "$JBR_HOME/bin/java" \
+        "--add-opens=java.base/java.lang=ALL-UNNAMED" \
         -Xmx4g \
         -Djava.awt.headless=true \
         -Dintellij.build.community.home.path="$INTELLIJ_DIR" \
@@ -380,6 +376,22 @@ build_kotlin() {
             -Dmaven.repo.local="$LOCAL_MAVEN_REPO" \
             -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-kotlin.init.gradle.kts" \
+            :kotlinx-serialization-compiler-plugin.embeddable:publishToMavenLocal \
+            :kotlin-stdlib-common:publishToMavenLocal \
+            :kotlin-util-klib:publishToMavenLocal \
+            :kotlin-gradle-plugin-idea:publishToMavenLocal \
+            :kotlin-gradle-plugin-idea-proto:publishToMavenLocal \
+            :native:kotlin-klib-commonizer-api:publishToMavenLocal \
+            :compiler:build-tools:kotlin-build-statistics:publishToMavenLocal \
+            :kotlin-util-klib-metadata:publishToMavenLocal \
+            :kotlin-util-io:publishToMavenLocal \
+            :libraries:tools:gradle:fus-statistics-gradle-plugin:publishToMavenLocal \
+            :kotlin-gradle-plugin-annotations:publishToMavenLocal \
+            :native:kotlin-native-utils:publishToMavenLocal \
+            :kotlin-gradle-plugins-bom:publishToMavenLocal \
+            :kotlin-daemon-client:publishToMavenLocal \
+            :kotlin-tooling-core:publishToMavenLocal \
+            :kotlin-compiler-runner:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-compat:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-cri-impl:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-impl:publishToMavenLocal \
@@ -418,7 +430,7 @@ build_gradle() {
     # $1: GRADLE_USER_HOME to use
     (cd "$GRADLE_DIR" && \
         rm -f gradle/verification-metadata.xml && \
-        GRADLE_USER_HOME="$GRADLE_KOTLIN_HOME" \
+        GRADLE_USER_HOME="$GRADLE_GRADLE_HOME" \
         JAVA_HOME="$JDK17_HOME" \
         ./gradlew \
             -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
