@@ -125,7 +125,7 @@ install_tools() {
 # Directory preparation
 # ---------------------------------------------------------------------------
 prepare_dirs() {
-    mkdir -p "$INTELLIJ_CACHE" "$GRADLE_KOTLIN_HOME" "$INTELLIJ_REPO $KOTLIN_REPO"
+    mkdir -p "$INTELLIJ_CACHE" "$GRADLE_KOTLIN_HOME" "$INTELLIJ_REPO" "$KOTLIN_REPO"
 }
 
 # ---------------------------------------------------------------------------
@@ -478,9 +478,6 @@ build_gradle() {
 #    gradle-kotlin-maven-repo (remote repositories are forbidden from serving them
 #    by the init script, so a successful resolution proves the origin).
 # ---------------------------------------------------------------------------
-validate_clean_build() {
-}
-
 # ---------------------------------------------------------------------------
 main() {
     local steps=("$@")
@@ -493,7 +490,6 @@ main() {
             intellij) prepare_dirs; build_intellij ;;
             kotlin)   prepare_dirs; build_kotlin ;;
             gradle)   prepare_dirs; build_gradle ;;
-            validate) prepare_dirs; validate_clean_build ;;
             *) echo "unknown step: $step (expected tools|intellij|kotlin|gradle|validate)" >&2; exit 2 ;;
         esac
     done
