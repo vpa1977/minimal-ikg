@@ -30,7 +30,8 @@ GRADLE_DIST_DIR="$ROOT/gradle-dist"
 INTELLIJ_CACHE="$ROOT/intellij-cache"              # bazel vendor directory (IntelliJ build)
 GRADLE_KOTLIN_HOME="$ROOT/gradle-kotlin"           # GRADLE_USER_HOME (Kotlin + Gradle builds)
 GRADLE_GRADLE_HOME="$ROOT/gradle-gradle"           # GRADLE_USER_HOME (Gradle builds)
-LOCAL_MAVEN_REPO="$ROOT/gradle-kotlin-maven-repo"  # maven repository (Kotlin + Gradle builds)
+INTELLIJ_REPO="$ROOT/intellij-repo"  # maven repository (Kotlin + Gradle builds)
+KOTLIN_REPO="$ROOT/kotlin-repo"  # maven repository (Kotlin + Gradle builds)
 INIT_SCRIPTS_DIR="$ROOT/init-scripts"
 TOOLS_DIR="$ROOT/tools"
 
@@ -263,6 +264,31 @@ trim_android() {
         sed -i "\|CommunityRepositoryModules\.androidPlugin(allPlatforms = true),|d" "$props"
     fi
 
+    # COMMUNITY_REPOSITORY_PLUGINS also contains androidDesignPlugin(), which
+    # references the deleted intellij.android.design-plugin.descriptor modules.
+    # Remove it from the list and drop the now-unused private helper.
+    local repo_modules="$INTELLIJ_DIR/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt"
+    if grep -qF 'androidDesignPlugin(),' "$repo_modules"; then
+        python3 - "$repo_modules" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    s = f.read()
+# Remove the entry from COMMUNITY_REPOSITORY_PLUGINS.
+s = re.sub(r'\n    androidDesignPlugin\(\),\n', '\n', s, count=1)
+# Remove the private helper function (multiline, up to the next fun/val/private fun).
+s = re.sub(
+    r'\n  private fun androidDesignPlugin\(.*?\n  (?=fun androidPlugin|val supportedFfmpegPresets)',
+    '\n  ',
+    s,
+    count=1,
+    flags=re.DOTALL,
+)
+with open(path, "w") as f:
+    f.write(s)
+PYEOF
+    fi
+
     # Cosmetic: JPS would skip the missing .iml files anyway, but filtering the
     # android entries keeps the build logs clean. Entries for the kept dirs must
     # stay: their modules are bundled plugins / publish the android artifacts.
@@ -290,9 +316,9 @@ PYEOF
 
 build_intellij() {
     log "intellij: checking out $INTELLIJ_TAG"
-    local current
-    current="$(git -C "$INTELLIJ_DIR" describe --tags --exact-match 2>/dev/null || true)"
-    if [ "$current" != "$INTELLIJ_TAG" ]; then
+    # If HEAD already contains the required tag (e.g. local patches on top),
+    # leave it alone so fixes/commits are not reset.
+    if ! git -C "$INTELLIJ_DIR" merge-base --is-ancestor "$INTELLIJ_TAG" HEAD 2>/dev/null; then
         git -C "$INTELLIJ_DIR" checkout -q "$INTELLIJ_TAG"
     fi
 
@@ -344,7 +370,7 @@ build_intellij() {
         -Dbuild.number="$INTELLIJ_VERSION" \
         -jar "$deploy_jar")
 
-    log "intellij: copying maven artifacts into $LOCAL_MAVEN_REPO"
+    log "intellij: copying maven artifacts into $INTELLIJ_REPO"
     local maven_artifacts="$INTELLIJ_DIR/out/idea-ce/artifacts/maven-artifacts"
     if [ ! -d "$maven_artifacts" ]; then
         # Fallback: locate the produced maven repository.
@@ -354,7 +380,7 @@ build_intellij() {
         echo "ERROR: IntelliJ maven artifacts not found under $INTELLIJ_DIR/out" >&2
         exit 1
     }
-    rsync -a "$maven_artifacts/" "$LOCAL_MAVEN_REPO/"
+    rsync -a "$maven_artifacts/" "$INTELLIJ_REPO/"
 }
 
 # ---------------------------------------------------------------------------
@@ -366,15 +392,15 @@ build_intellij() {
 # com.jetbrains.intellij.* artifacts (produced in Step 1).
 # ---------------------------------------------------------------------------
 build_kotlin() {
-    log "kotlin: publishing $KOTLIN_VERSION artifacts to $LOCAL_MAVEN_REPO"
+    log "kotlin: publishing $KOTLIN_VERSION artifacts to $KOTLIN_REPO"
     (cd "$KOTLIN_DIR" && \
         rm -f gradle/verification-metadata.xml && \
         GRADLE_USER_HOME="$GRADLE_KOTLIN_HOME" \
         JAVA_HOME="$JDK17_HOME" \
         ./gradlew \
             -Pbuild.number="$KOTLIN_VERSION" \
-            -Dmaven.repo.local="$LOCAL_MAVEN_REPO" \
-            -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
+            -Dmaven.repo.local="$KOTLIN_REPO" \
+            -Dintellij.repo="$LOCAL_MAVEN_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-kotlin.init.gradle.kts" \
             :kotlinx-serialization-compiler-plugin.embeddable:publishToMavenLocal \
             :kotlin-stdlib-common:publishToMavenLocal \
@@ -433,7 +459,7 @@ build_gradle() {
         GRADLE_USER_HOME="$GRADLE_GRADLE_HOME" \
         JAVA_HOME="$JDK17_HOME" \
         ./gradlew \
-            -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
+            -Dlocal.maven.repo="$KOTLIN_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-gradle.init.gradle.kts" \
             --refresh-dependencies \
             --no-configuration-cache \
