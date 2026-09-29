@@ -25,6 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTELLIJ_DIR="$ROOT/intellij-community"
 KOTLIN_DIR="$ROOT/kotlin"
 GRADLE_DIR="$ROOT/gradle"
+GRADLE_DIST_DIR="$ROOT/gradle-dist"
 
 INTELLIJ_CACHE="$ROOT/intellij-cache"              # bazel vendor directory (IntelliJ build)
 GRADLE_KOTLIN_HOME="$ROOT/gradle-kotlin"           # GRADLE_USER_HOME (Kotlin + Gradle builds)
@@ -371,6 +372,7 @@ build_intellij() {
 build_kotlin() {
     log "kotlin: publishing $KOTLIN_VERSION artifacts to $LOCAL_MAVEN_REPO"
     (cd "$KOTLIN_DIR" && \
+        rm -f gradle/verification-metadata.xml && \
         GRADLE_USER_HOME="$GRADLE_KOTLIN_HOME" \
         JAVA_HOME="$JDK17_HOME" \
         ./gradlew \
@@ -378,6 +380,10 @@ build_kotlin() {
             -Dmaven.repo.local="$LOCAL_MAVEN_REPO" \
             -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-kotlin.init.gradle.kts" \
+            :compiler:build-tools:kotlin-build-tools-compat:publishToMavenLocal \
+            :compiler:build-tools:kotlin-build-tools-cri-impl:publishToMavenLocal \
+            :compiler:build-tools:kotlin-build-tools-impl:publishToMavenLocal \
+            :kotlin-daemon-embeddable:publishToMavenLocal \
             :kotlin-stdlib:publishToMavenLocal \
             :kotlin-reflect:publishToMavenLocal \
             :kotlin-metadata-jvm:publishToMavenLocal \
@@ -408,23 +414,23 @@ build_kotlin() {
 # com.jetbrains.intellij.* artifacts, so a successful resolution proves they
 # came from the locally built repository.
 # ---------------------------------------------------------------------------
-gradle_resolve_kotlin_dsl() {
+build_gradle() {
     # $1: GRADLE_USER_HOME to use
     (cd "$GRADLE_DIR" && \
-        GRADLE_USER_HOME="$1" \
+        rm -f gradle/verification-metadata.xml && \
+        GRADLE_USER_HOME="$GRADLE_KOTLIN_HOME" \
         JAVA_HOME="$JDK17_HOME" \
         ./gradlew \
             -Dlocal.maven.repo="$LOCAL_MAVEN_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-gradle.init.gradle.kts" \
             --refresh-dependencies \
-            :platforms:core-configuration:kotlin-dsl:dependencies \
-            --configuration compileClasspath)
+            --no-configuration-cache \
+            -Dorg.gradle.isolated-projects=false \
+            -Pgradle_installPath="$GRADLE_DIST_DIR" \
+            --no-daemon \
+            install)
 }
 
-build_gradle() {
-    log "gradle: resolving kotlin-dsl compileClasspath (kotlin from $LOCAL_MAVEN_REPO)"
-    gradle_resolve_kotlin_dsl "$GRADLE_KOTLIN_HOME"
-}
 
 # ---------------------------------------------------------------------------
 # Step 4: validation of the clean build
