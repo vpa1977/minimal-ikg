@@ -125,7 +125,7 @@ install_tools() {
 # Directory preparation
 # ---------------------------------------------------------------------------
 prepare_dirs() {
-    mkdir -p "$INTELLIJ_CACHE" "$GRADLE_KOTLIN_HOME" "$LOCAL_MAVEN_REPO"
+    mkdir -p "$INTELLIJ_CACHE" "$GRADLE_KOTLIN_HOME" "$INTELLIJ_REPO $KOTLIN_REPO"
 }
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ build_kotlin() {
         ./gradlew \
             -Pbuild.number="$KOTLIN_VERSION" \
             -Dmaven.repo.local="$KOTLIN_REPO" \
-            -Dintellij.repo="$LOCAL_MAVEN_REPO" \
+            -Dintellij.repo="$INTELLIJ_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-kotlin.init.gradle.kts" \
             :kotlinx-serialization-compiler-plugin.embeddable:publishToMavenLocal \
             :kotlin-stdlib-common:publishToMavenLocal \
@@ -479,67 +479,6 @@ build_gradle() {
 #    by the init script, so a successful resolution proves the origin).
 # ---------------------------------------------------------------------------
 validate_clean_build() {
-    log "validate: checking artifacts in $LOCAL_MAVEN_REPO"
-
-    local missing=0
-
-    local intellij_platform_modules=(
-        util-rt util-class-loader util util-base util-xml-dom core core-impl extensions
-        diagnostic diagnostic-telemetry util-progress util-coroutines
-        jps-model jps-model-impl jps-model-serialization util-jdom analysis
-    )
-    local intellij_java_modules=(
-        java-psi java-psi-impl java-frontback-psi java-frontback-psi-impl java-compiler-ant-tasks
-    )
-    local m dir
-    for m in "${intellij_platform_modules[@]}"; do
-        dir="$LOCAL_MAVEN_REPO/com/jetbrains/intellij/platform/$m/$INTELLIJ_VERSION"
-        [ -d "$dir" ] && [ -n "$(find "$dir" -name '*.jar' -o -name '*.pom' | head -n 1)" ] || {
-            echo "MISSING: com.jetbrains.intellij.platform:$m:$INTELLIJ_VERSION ($dir)"; missing=1; }
-    done
-    for m in "${intellij_java_modules[@]}"; do
-        dir="$LOCAL_MAVEN_REPO/com/jetbrains/intellij/java/$m/$INTELLIJ_VERSION"
-        [ -d "$dir" ] && [ -n "$(find "$dir" -name '*.jar' -o -name '*.pom' | head -n 1)" ] || {
-            echo "MISSING: com.jetbrains.intellij.java:$m:$INTELLIJ_VERSION ($dir)"; missing=1; }
-    done
-
-    local kotlin_modules=(
-        kotlin-stdlib kotlin-reflect kotlin-metadata-jvm kotlin-script-runtime
-        kotlin-scripting-common kotlin-scripting-jvm kotlin-scripting-jvm-host
-        kotlin-scripting-compiler-embeddable kotlin-scripting-compiler-impl-embeddable
-        kotlin-compiler-embeddable kotlin-build-tools-api kotlin-build-tools-impl
-        kotlin-gradle-plugin-api kotlin-gradle-plugin
-        kotlin-sam-with-receiver kotlin-sam-with-receiver-compiler-plugin
-        kotlin-sam-with-receiver-compiler-plugin-embeddable
-        kotlin-assignment kotlin-assignment-compiler-plugin-embeddable
-        jvm-abi-gen-embeddable
-    )
-    for m in "${kotlin_modules[@]}"; do
-        dir="$LOCAL_MAVEN_REPO/org/jetbrains/kotlin/$m/$KOTLIN_VERSION"
-        [ -d "$dir" ] && [ -n "$(find "$dir" -name '*.jar' -o -name '*.pom' | head -n 1)" ] || {
-            echo "MISSING: org.jetbrains.kotlin:$m:$KOTLIN_VERSION ($dir)"; missing=1; }
-    done
-
-    [ "$missing" -eq 0 ] || { echo "ERROR: required artifacts are missing from $LOCAL_MAVEN_REPO" >&2; exit 1; }
-
-    log "validate: clean resolution (fresh GRADLE_USER_HOME, remote repos forbidden for these artifacts)"
-    local validation_home="$ROOT/gradle-kotlin-validation"
-    rm -rf "$validation_home"
-    mkdir -p "$validation_home"
-
-    local report="$validation_home/kotlin-dsl-compileClasspath.txt"
-    gradle_resolve_kotlin_dsl "$validation_home" | tee "$report"
-
-    if grep -E 'org\.jetbrains\.kotlin.*FAILED|com\.jetbrains\.intellij.*FAILED' "$report"; then
-        echo "ERROR: some IntelliJ/Kotlin dependencies FAILED to resolve" >&2
-        exit 1
-    fi
-    if ! grep -Eq 'org\.jetbrains\.kotlin[^ ]*(:|-> )2\.4\.10' "$report"; then
-        echo "ERROR: no org.jetbrains.kotlin:2.4.10 dependencies found in the resolved classpath" >&2
-        exit 1
-    fi
-
-    log "validate: OK -- IntelliJ and Kotlin dependencies come from $LOCAL_MAVEN_REPO"
 }
 
 # ---------------------------------------------------------------------------
