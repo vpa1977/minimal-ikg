@@ -1,18 +1,22 @@
-# You task
+# Your task
 
-Write the shell script to build intellij -> kotlin -> gradle
-by calling minimal build commands described in Plan.md.
+Update minimal build of intellij-community
 
-Use intellij-cache bazel vendor directory for intellij build
-Use gradle-kotlin gradle user home for kotlin and gradle builds
-Use gradle-kotlin-maven-repo for kotlin and gradle build maven repositories
+# What to exclude
 
-DO NOT USE installers.cmd command directly for intellij, USE bazel command.
+Exclude jar files found in `skip-build.csv` from building.
 
-Write build.sh shell script.
-Write init scripts to use local repositories.
+# How to patch
 
-Validate the clean build -> intellij and kotlin dependencies MUST come from gradle-kotlin-maven-repo.
+Create commits in intellij-community.
 
+# How to validate
+
+Remove all files from `gradle-kotlin-maven-repo` and build intellij.
+Check that none of the files found in `skip-build.csv` are present.
+
+# Build intellij-community
+
+./build.sh intellij
 
 

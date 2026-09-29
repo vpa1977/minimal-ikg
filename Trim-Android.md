@@ -89,9 +89,15 @@ grep-guarded, unconditional (decision: always trim).
    remove the line `CommunityRepositoryModules.androidPlugin(allPlatforms = true),`
    (idempotent: skip if already removed; fail loudly if the anchor is not found,
    mirroring existing patch helpers).
-3. **Filter** android entries (`$PROJECT_DIR$/android/`) out of `.idea/modules.xml`
+3. **Patch** `platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt`:
+   remove the `androidDesignPlugin(),` entry from `COMMUNITY_REPOSITORY_PLUGINS` and
+   drop the now-unused private `androidDesignPlugin()` helper. This plugin layout
+   references deleted designer modules (compose-designer, layoutlib, nav.editor,
+   etc.) and makes `checkProductLayout` fail with "modules from moduleJars aren't
+   found in the project".
+4. **Filter** android entries (`$PROJECT_DIR$/android/`) out of `.idea/modules.xml`
    (cosmetic; JPS would skip them anyway — keeps logs clean).
-4. Leave untouched (all tolerated): `intellij.idea.community.main.android.iml`
+5. Leave untouched (all tolerated): `intellij.idea.community.main.android.iml`
    (empty module, dangling deps ignored), `.idea/compiler.xml` (per-module javac
    options for absent modules are unused), `.idea/libraries/*` (maven-resolved,
    still resolvable).
@@ -120,7 +126,7 @@ Remove `intellij-community/out/idea-ce` before the first trimmed run —
 ## Rollback
 
 ```bash
-git -C intellij-community checkout -- android .idea/modules.xml build/src
+git -C intellij-community checkout -- android .idea/modules.xml build/src platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt
 rm -rf intellij-community/out/idea-ce
 ./build.sh intellij   # trim re-applies automatically; to disable, remove trim_android() call
 ```
