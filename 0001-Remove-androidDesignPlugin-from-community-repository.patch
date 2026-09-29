@@ -1,0 +1,67 @@
+From 7a767d2c1001309f4ae0f5058a0f262cafc0d386 Mon Sep 17 00:00:00 2001
+From: Ubuntu <ubuntu@opencode-kotlin-gradle-intellij-1c1dd8.lxd>
+Date: Tue, 29 Sep 2026 06:13:33 +0000
+Subject: [PATCH] Remove androidDesignPlugin from community repository plugins
+
+The intellij.android.design-plugin.descriptor plugin references Android
+Studio designer modules (compose-designer, layoutlib, nav.editor, etc.)
+that are removed when trimming the android/ tree for the minimal platform
+build. Exclude the plugin layout so checkProductLayout no longer fails
+with 'modules from moduleJars aren't found in the project'.
+---
+ .../build/CommunityRepositoryModules.kt       | 32 -------------------
+ 1 file changed, 32 deletions(-)
+
+diff --git a/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt b/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt
+index da47ba7340d2..03259a1f2ea6 100644
+--- a/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt
++++ b/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt
+@@ -187,7 +187,6 @@ object CommunityRepositoryModules {
+       spec.withResource("lib/bundles", "lib/bundles")
+     },
+     PythonCommunityPluginModules.pythonCommunityPluginLayout(),
+-    androidDesignPlugin(),
+     pluginAuto(listOf("intellij.completionMlRankingModels")) { spec ->
+       spec.bundlingRestrictions.includeInDistribution = PluginDistribution.NOT_FOR_RELEASE
+     },
+@@ -229,37 +228,6 @@ object CommunityRepositoryModules {
+     },
+   )
+ 
+-  private fun androidDesignPlugin(mainModuleName: String = "intellij.android.design-plugin.descriptor"): PluginLayout {
+-    return pluginAutoWithCustomDirName(mainModuleName, "design-tools") { spec ->
+-      // modules:
+-      // design-tools.jar
+-      spec.withModule("intellij.android.compose-designer")
+-      if (mainModuleName != "intellij.android.design-plugin.descriptor") {
+-        spec.withModule("intellij.android.design-plugin.descriptor")
+-      }
+-      spec.withModule("intellij.android.designer.customview")
+-      spec.withModule("intellij.android.designer")
+-      spec.withModule("intellij.android.glance-designer")
+-      spec.withModule("intellij.android.layoutlib")
+-      spec.withModule("intellij.android.nav.editor")
+-      spec.withModule("intellij.android.nav.editor.gradle")
+-      spec.withModule("intellij.android.preview-designer")
+-      spec.withModule("intellij.android.wear-designer")
+-      spec.withModule("intellij.android.motion-editor")
+-      spec.withModule("intellij.android.visual-lint")
+-
+-      // libs:
+-      spec.withProjectLibrary("layoutlib")
+-
+-      // :libs
+-
+-      //"resources": [
+-      //  "//prebuilts/studio/layoutlib:layoutlib",
+-      //  "//tools/adt/idea/compose-designer:kotlin-compiler-daemon-libs",
+-      //],
+-    }
+-  }
+-
+   fun androidPlugin(additionalModulesToJars: Map<String, String> = emptyMap(),
+                     mainModuleName: String = "intellij.android.plugin.descriptor",
+                     allPlatforms: Boolean = false,
+-- 
+2.55.0
+
