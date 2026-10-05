@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-REPO_DIR = ROOT / "gradle-kotlin-maven-repo"
-GRADLE_KOTLIN_DIR = ROOT / "gradle-kotlin"
+REPO_DIR = ROOT / "kotlin-repo"
+GRADLE_KOTLIN_DIR = ROOT / "gradle-gradle"
 OUTPUT_CSV = ROOT / "skip-build.csv"
 
 
@@ -68,6 +68,8 @@ def main() -> int:
     rows: list[tuple[str, str]] = []
     for jar in maven_jars:
         if jar.name in gradle_kotlin_basenames:
+            continue
+        if "-sources" in jar.name:
             continue
         group_id, artifact_id, version, classifier = parse_maven_coordinates(jar, REPO_DIR)
         coord = format_coordinates(group_id, artifact_id, version, classifier)
