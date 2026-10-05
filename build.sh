@@ -70,7 +70,7 @@ install_tools() {
     # JDKs required by the builds (build JVM / toolchains).
     if [ ! -x "$JDK17_HOME/bin/java" ] || [ ! -x "$JDK25_HOME/bin/java" ]; then
         $sudo apt-get update
-        $sudo apt-get install -y openjdk-17-jdk openjdk-25-jdk
+        $sudo apt-get install -y openjdk-17-jdk openjdk-25-jdk openjdk-11-jdk openjdk-8-jdk
     fi
 
     # Misc tools used by this script and the builds.
@@ -212,22 +212,17 @@ EOF
 }
 
 # ~99% of intellij-community/android/ (the Android Studio plugin sources) is not
-# needed by the platform build: bazel never references it, and the only android
-# maven artifacts ever published are the 7 com.jetbrains.intellij.android:*
-# gradle-dsl / declarative-lang modules. Trim everything except those 9 source
-# dirs (see Trim-Android.md for the full analysis). Idempotent, unconditional.
+# The Android sources under intellij-community/android/ are not consumed by the
+# downstream Kotlin or Gradle builds (see Trim-Android.md for the full analysis).
+# Trim the whole tree, keeping only the nested repo metadata so the trim stays
+# reversible. Idempotent, unconditional.
 trim_android() {
     local android_dir="$INTELLIJ_DIR/android"
     [ -d "$android_dir" ] || return 0
 
     # .git (nested repo metadata) is kept so the trim stays reversible via
     # `git -C intellij-community/android checkout -- .`
-    local keep=(
-        .git LICENSE.txt README.md
-        gradle-dsl gradle-dsl-flags gradle-dsl-toml gradle-dsl-kotlin
-        gradle-dsl-declarative gradle-dsl-groovy
-        gradle-declarative-lang gradle-declarative-lang-sync gradle-declarative-lang-ide
-    )
+    local keep=(.git LICENSE.txt README.md)
 
     local trimmed=0
     local entry name k drop
@@ -290,28 +285,148 @@ PYEOF
     fi
 
     # Cosmetic: JPS would skip the missing .iml files anyway, but filtering the
-    # android entries keeps the build logs clean. Entries for the kept dirs must
-    # stay: their modules are bundled plugins / publish the android artifacts.
+    # android entries keeps the build logs clean.
     local modules_xml="$INTELLIJ_DIR/.idea/modules.xml"
     if grep -qF '$PROJECT_DIR$/android/' "$modules_xml"; then
         python3 - "$modules_xml" <<'PYEOF'
 import sys
 path = sys.argv[1]
-keep = (
-    "gradle-dsl", "gradle-dsl-flags", "gradle-dsl-toml", "gradle-dsl-kotlin",
-    "gradle-dsl-declarative", "gradle-dsl-groovy",
-    "gradle-declarative-lang", "gradle-declarative-lang-sync",
-    "gradle-declarative-lang-ide",
-)
 prefix = "$PROJECT_DIR$/android/"
 with open(path) as f:
     lines = f.readlines()
-out = [l for l in lines
-       if prefix not in l or any(prefix + k + "/" in l for k in keep)]
+out = [l for l in lines if prefix not in l]
 with open(path, "w") as f:
     f.writelines(out)
 PYEOF
     fi
+}
+
+# The bundled plugins under intellij-community/plugins/ are not consumed by the
+# downstream Kotlin or Gradle builds. Remove their sources, their Bazel targets,
+# their JPS module entries, and their product-layout definitions so the build
+# system never processes them. Keep only the two JPS plugin packages required
+# by //platform/build-scripts:buildScripts:
+#   plugins/devkit/jps-plugin
+#   plugins/ui-designer/jps-plugin
+trim_plugins() {
+    local plugins_dir="$INTELLIJ_DIR/plugins"
+    [ -d "$plugins_dir" ] || return 0
+
+    # 1. Remove plugin runtime deps from the root BUILD.bazel main target
+    #    before deleting the directories they reference.
+    local build_bazel="$INTELLIJ_DIR/BUILD.bazel"
+    if grep -qF '### auto-generated section `build intellij.idea.community.main` start' "$build_bazel"; then
+        python3 - "$build_bazel" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    lines = f.readlines()
+start = "### auto-generated section `build intellij.idea.community.main` start"
+end = "### auto-generated section `build intellij.idea.community.main` end"
+in_main = False
+out = []
+for line in lines:
+    if start in line:
+        in_main = True
+    if in_main and "//plugins/" in line:
+        continue
+    out.append(line)
+    if end in line:
+        in_main = False
+with open(path, "w") as f:
+    f.writelines(out)
+PYEOF
+    fi
+
+    # 2. Clear COMMUNITY_REPOSITORY_PLUGINS so product-layout checks don't
+    #    require plugin modules.
+    local repo_modules="$INTELLIJ_DIR/platform/build-scripts/src/org/jetbrains/intellij/build/CommunityRepositoryModules.kt"
+    if grep -qF 'val COMMUNITY_REPOSITORY_PLUGINS:' "$repo_modules" && \
+       grep -qF 'plugin("intellij.ant")' "$repo_modules"; then
+        python3 - "$repo_modules" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    s = f.read()
+s = re.sub(
+    r'(val COMMUNITY_REPOSITORY_PLUGINS: PersistentList<PluginLayout> = persistentListOf\()[\s\S]*?\n  \)',
+    r'\1)',
+    s,
+)
+with open(path, "w") as f:
+    f.write(s)
+PYEOF
+    fi
+
+    # 3. Clear bundledPluginModules and pluginLayouts in IdeaCommunityProperties.
+    local props="$INTELLIJ_DIR/build/src/org/jetbrains/intellij/build/IdeaCommunityProperties.kt"
+    if grep -qF 'productLayout.bundledPluginModules = IDEA_BUNDLED_PLUGINS' "$props"; then
+        python3 - "$props" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    s = f.read()
+s = re.sub(
+    r'productLayout\.bundledPluginModules = IDEA_BUNDLED_PLUGINS \+ sequenceOf\([\s\S]*?\)',
+    'productLayout.bundledPluginModules = persistentListOf()',
+    s,
+)
+s = re.sub(
+    r'productLayout\.pluginLayouts = CommunityRepositoryModules\.COMMUNITY_REPOSITORY_PLUGINS\.addAll\(listOf\([\s\S]*?\n    \)\)',
+    'productLayout.pluginLayouts = persistentListOf()',
+    s,
+)
+with open(path, "w") as f:
+    f.write(s)
+PYEOF
+    fi
+
+    # 4. Delete plugin source directories, keeping only the two JPS plugin
+    #    packages required by //platform/build-scripts:buildScripts.
+    local entry name
+    while IFS= read -r entry; do
+        name="$(basename "$entry")"
+        case "$name" in
+            .git|LICENSE.txt|README.md) ;;
+            devkit)
+                find "$entry" -mindepth 1 -maxdepth 1 ! -name 'jps-plugin' -exec rm -rf {} +
+                ;;
+            ui-designer)
+                find "$entry" -mindepth 1 -maxdepth 1 ! -name 'jps-plugin' -exec rm -rf {} +
+                ;;
+            *)
+                rm -rf "$entry"
+                ;;
+        esac
+    done < <(find "$plugins_dir" -mindepth 1 -maxdepth 1)
+
+    # 5. Filter plugin entries from modules.xml, keeping the two JPS plugin
+    #    modules that are still required.
+    local modules_xml="$INTELLIJ_DIR/.idea/modules.xml"
+    if grep -qF '$PROJECT_DIR$/plugins/' "$modules_xml"; then
+        python3 - "$modules_xml" <<'PYEOF'
+import sys
+path = sys.argv[1]
+prefix = "$PROJECT_DIR$/plugins/"
+keep = (
+    "$PROJECT_DIR$/plugins/devkit/jps-plugin/",
+    "$PROJECT_DIR$/plugins/ui-designer/jps-plugin/",
+)
+with open(path) as f:
+    lines = f.readlines()
+out = []
+for l in lines:
+    if prefix in l and not any(k in l for k in keep):
+        continue
+    out.append(l)
+with open(path, "w") as f:
+    f.writelines(out)
+PYEOF
+    fi
+
+    log "intellij: trimmed plugins/"
+    # Stale JPS caches (incrementalCompilation=true) reference deleted modules.
+    rm -rf "$INTELLIJ_DIR/out/idea-ce"
 }
 
 build_intellij() {
@@ -323,6 +438,7 @@ build_intellij() {
     fi
 
     trim_android
+    trim_plugins
     ensure_intellij_bazel_target
     fix_intellij_lib_build_file
     seed_intellij_m2_deps
@@ -396,12 +512,15 @@ build_kotlin() {
     (cd "$KOTLIN_DIR" && \
         rm -f gradle/verification-metadata.xml && \
         GRADLE_USER_HOME="$GRADLE_KOTLIN_HOME" \
-        JAVA_HOME="$JDK17_HOME" \
+        JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64" \
+        ORG_GRADLE_PROJECT_jdk11Home=="/usr/lib/jvm/java-11-openjdk-amd64" \
+        ORG_GRADLE_PROJECT_jdk8Home=="/usr/lib/jvm/java-8-openjdk-amd64" \
         ./gradlew \
             -Pbuild.number="$KOTLIN_VERSION" \
             -Dmaven.repo.local="$KOTLIN_REPO" \
             -Dintellij.repo="$INTELLIJ_REPO" \
             -I "$INIT_SCRIPTS_DIR/local-repos-kotlin.init.gradle.kts" \
+            clean \
             :kotlinx-serialization-compiler-plugin.embeddable:publishToMavenLocal \
             :kotlin-stdlib-common:publishToMavenLocal \
             :kotlin-util-klib:publishToMavenLocal \
@@ -422,6 +541,8 @@ build_kotlin() {
             :compiler:build-tools:kotlin-build-tools-cri-impl:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-impl:publishToMavenLocal \
             :kotlin-daemon-embeddable:publishToMavenLocal \
+            :kotlin-gradle-plugin-api:publishToMavenLocal \
+            :kotlin-gradle-plugin:publishToMavenLocal \
             :kotlin-stdlib:publishToMavenLocal \
             :kotlin-reflect:publishToMavenLocal \
             :kotlin-metadata-jvm:publishToMavenLocal \
@@ -434,14 +555,14 @@ build_kotlin() {
             :kotlin-compiler-embeddable:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-api:publishToMavenLocal \
             :compiler:build-tools:kotlin-build-tools-impl:publishToMavenLocal \
-            :kotlin-gradle-plugin-api:publishToMavenLocal \
-            :kotlin-gradle-plugin:publishToMavenLocal \
             :kotlin-sam-with-receiver:publishToMavenLocal \
             :kotlin-sam-with-receiver-compiler-plugin:publishToMavenLocal \
             :kotlin-sam-with-receiver-compiler-plugin.embeddable:publishToMavenLocal \
             :kotlin-assignment:publishToMavenLocal \
             :kotlin-assignment-compiler-plugin.embeddable:publishToMavenLocal \
-            :plugins:jvm-abi-gen-embeddable:publishToMavenLocal)
+            :plugins:jvm-abi-gen-embeddable:publishToMavenLocal \
+            distZip)
+
 }
 
 # ---------------------------------------------------------------------------
@@ -466,7 +587,8 @@ build_gradle() {
             -Dorg.gradle.isolated-projects=false \
             -Pgradle_installPath="$GRADLE_DIST_DIR" \
             --no-daemon \
-            install)
+            --stacktrace \
+            clean install)
 }
 
 
@@ -489,11 +611,10 @@ main() {
             tools)    install_tools; ran_tools=1 ;;
             intellij) prepare_dirs; build_intellij ;;
             kotlin)   prepare_dirs; build_kotlin ;;
-            gradle)   prepare_dirs; build_gradle ;;
+            gradle)   prepare_dirs; build_gradle;;
             *) echo "unknown step: $step (expected tools|intellij|kotlin|gradle|validate)" >&2; exit 2 ;;
         esac
     done
-    [ "$ran_tools" -eq 1 ] || true
 }
 
 main "$@"
