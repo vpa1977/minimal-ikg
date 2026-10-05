@@ -35,6 +35,8 @@ Rewrite the project's build scripts so that:
 
 ### 1. Compute the used-task closure
 
+Check that `build.sh` exist. Abort if it does not.
+
 Run the exact `build.sh` Gradle invocation with `--dry-run` and parse the output
 for `:project:task SKIPPED` lines. This yields:
 
